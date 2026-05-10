@@ -39,10 +39,6 @@ async def handle_soundcloud_link(message):
     except Exception as e:
         await reply_msg.edit_text(f"❌ An error occurred: {str(e)}")
 
-@bot.on_message()
-async def welcome(message):
-    await bot.send_message(message.chat.id,"Send me a SoundCloud link and I will download it for you!")
-
 if __name__ == "__main__":
     print("Bot is running...")
     bot.run()
