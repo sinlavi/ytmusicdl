@@ -1,0 +1,2 @@
+python-bale-bot>=2.5.0
+yt-dlp>=2025.5.22
