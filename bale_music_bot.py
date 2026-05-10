@@ -1,5 +1,5 @@
 """
-bale_music_bot.py  (FIXED: imports handler, not handlers)
+bale_music_bot.py  (REFACTORED for Balethon)
 """
 
 from __future__ import annotations
@@ -12,12 +12,11 @@ import logging
 import tempfile
 from pathlib import Path
 
-from bale import Bot, Message, InputFile
-from bale.handler import MessageHandler          # ← corrected import
-
+from balethon import Client                # Balethon's main client class
+from balethon.conditions import private    # Optional: only respond in private chats
 from youtube_downloader import download_audio
 
-# ── Config ───────────────────────────────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────
 TOKEN = os.getenv("BALE_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT)
@@ -28,31 +27,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger("bale_bot")
 
+# YouTube URL regex pattern
 YT_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[\w-]+",
     re.IGNORECASE,
 )
 
-bot = Bot(token=TOKEN)
-
-# ── Handlers ─────────────────────────────────────────────────────────────
-
-@bot.listen("on_ready")
-async def on_ready():
-    await bot.delete_webhook()
-    logger.info("🤖 Bot is ready — %s", bot.user)
+bot = Client(token=TOKEN)
 
 
-@bot.listen("on_message")
-async def on_message(message: Message):
-    if not message.content:
+# ── Event Handlers ───────────────────────────────────────────────────────
+@bot.on_message()
+async def on_message(message):
+    """Handle all incoming text messages."""
+    if not message.text:
         return
 
-    text = message.content.strip()
-    chat = message.chat
+    text = message.text.strip()
+    chat_id = message.chat.id
 
+    # ── Command handlers ───────────────────────────────────────────────
     if text == "/start":
-        await chat.send(
+        await bot.send_message(
+            chat_id,
             "🎵 **Bale YouTube Music Bot**\n\n"
             "Send me a YouTube link and I'll download the audio as **MP3 320 kbps**.\n\n"
             "🌐 _avasam.ir_"
@@ -60,7 +57,8 @@ async def on_message(message: Message):
         return
 
     if text == "/help":
-        await chat.send(
+        await bot.send_message(
+            chat_id,
             "📌 **Usage:**\n"
             "Just send a YouTube URL, e.g.:\n"
             "`https://youtu.be/dQw4w9WgXcQ`\n\n"
@@ -68,24 +66,33 @@ async def on_message(message: Message):
         )
         return
 
+    # ── YouTube URL handling ───────────────────────────────────────────
     urls = YT_RE.findall(text)
     for url in urls:
-        asyncio.create_task(_handle_download(chat, url))
+        asyncio.create_task(_handle_download(chat_id, url))
 
 
-async def _handle_download(chat, url: str):
+async def _handle_download(chat_id: int, url: str):
+    """Download audio with semaphore-based concurrency control."""
     async with DOWNLOAD_SEMAPHORE:
-        status_msg = await chat.send(f"⏳ **Processing…**\n`{url[:60]}…`")
+        # Send a temporary status message
+        status_msg = await bot.send_message(
+            chat_id,
+            f"⏳ **Processing…**\n`{url[:60]}…`"
+        )
 
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
+                # Run the blocking download_audio in a thread pool
                 loop = asyncio.get_running_loop()
                 mp3_path = await loop.run_in_executor(
                     None, download_audio, url, tmpdir
                 )
 
                 if mp3_path is None:
-                    await status_msg.edit(
+                    await bot.edit_message_text(
+                        chat_id,
+                        status_msg.id,
                         "❌ **Download failed** — all 8 methods exhausted.\n"
                         "The video may be geo‑blocked or YouTube may have rate‑limited this IP.\n"
                         "Try again in a few minutes."
@@ -94,22 +101,31 @@ async def _handle_download(chat, url: str):
 
                 file_size_mb = mp3_path.stat().st_size / (1024 * 1024)
 
-                await status_msg.edit(f"📤 **Uploading…** ({file_size_mb:.1f} MB)")
+                # Update the status message to show upload progress
+                await bot.edit_message_text(
+                    chat_id,
+                    status_msg.id,
+                    f"📤 **Uploading…** ({file_size_mb:.1f} MB)"
+                )
 
-                with open(mp3_path, "rb") as fh:
-                    file_bytes = fh.read()
-
-                await chat.send_document(
-                    document=InputFile(file_bytes, file_name=mp3_path.name),
+                # Send the MP3 file as a document
+                await bot.send_document(
+                    chat_id,
+                    mp3_path,   # Balethon accepts a file path directly
                     caption=f"🎧 {mp3_path.stem}\n🔊 MP3 320 kbps | {file_size_mb:.1f} MB",
                 )
 
-                await status_msg.delete()
+                # Clean up the temporary status message
+                await bot.delete_message(chat_id, status_msg.id)
 
         except Exception as exc:
             logger.exception("Download task failed")
             try:
-                await status_msg.edit(f"⚠️ **Error:** {exc}")
+                await bot.edit_message_text(
+                    chat_id,
+                    status_msg.id,
+                    f"⚠️ **Error:** {exc}"
+                )
             except Exception:
                 pass
 
