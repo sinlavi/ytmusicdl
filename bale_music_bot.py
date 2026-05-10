@@ -1,7 +1,5 @@
 """
-bale_music_bot.py
-Bale messenger bot – receives YouTube links, downloads 320 kbps MP3,
-and sends the audio file back to the user.
+bale_music_bot.py  (FIXED: imports handler, not handlers)
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from bale import Bot, Message, InputFile
-from bale.handlers import CommandHandler, MessageHandler
+from bale.handler import MessageHandler          # ← corrected import
 
 from youtube_downloader import download_audio
 
@@ -30,14 +28,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("bale_bot")
 
-# ── YouTube URL pattern ──────────────────────────────────────────────────
 YT_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[\w-]+",
     re.IGNORECASE,
 )
 
 bot = Bot(token=TOKEN)
-
 
 # ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -49,14 +45,12 @@ async def on_ready():
 
 @bot.listen("on_message")
 async def on_message(message: Message):
-    """Main entry point: detect YouTube URLs and start download."""
     if not message.content:
         return
 
     text = message.content.strip()
     chat = message.chat
 
-    # /start
     if text == "/start":
         await chat.send(
             "🎵 **Bale YouTube Music Bot**\n\n"
@@ -65,7 +59,6 @@ async def on_message(message: Message):
         )
         return
 
-    # /help
     if text == "/help":
         await chat.send(
             "📌 **Usage:**\n"
@@ -75,17 +68,12 @@ async def on_message(message: Message):
         )
         return
 
-    # Extract YouTube URLs
     urls = YT_RE.findall(text)
-    if not urls:
-        return  # not a YouTube link – ignore
-
     for url in urls:
         asyncio.create_task(_handle_download(chat, url))
 
 
 async def _handle_download(chat, url: str):
-    """Download audio with concurrency control and send result."""
     async with DOWNLOAD_SEMAPHORE:
         status_msg = await chat.send(f"⏳ **Processing…**\n`{url[:60]}…`")
 
@@ -108,7 +96,6 @@ async def _handle_download(chat, url: str):
 
                 await status_msg.edit(f"📤 **Uploading…** ({file_size_mb:.1f} MB)")
 
-                # Read file bytes and send as document
                 with open(mp3_path, "rb") as fh:
                     file_bytes = fh.read()
 
@@ -127,7 +114,6 @@ async def _handle_download(chat, url: str):
                 pass
 
 
-# ── Run ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     if TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("❌ Set BALE_BOT_TOKEN environment variable!")
