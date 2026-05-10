@@ -3,7 +3,7 @@ name: 🎵 Bale Music Bot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"   # restart every 6 hours to keep alive
+    - cron: "0 */6 * * *"
 
 jobs:
   run-bot:
@@ -11,29 +11,66 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache Docker images (WARP)
+        uses: actions/cache@v4
+        id: cache-warp
+        with:
+          path: /tmp/warp-image.tar
+          key: warp-image-caomingjun
+
+      - name: Load or pull WARP container
+        run: |
+          if [[ -f /tmp/warp-image.tar ]]; then
+            docker load < /tmp/warp-image.tar
+          else
+            docker pull caomingjun/warp
+            docker save caomingjun/warp -o /tmp/warp-image.tar
+          fi
 
       - name: Start Cloudflare WARP proxy
         run: |
-          docker network create warp-net || true
+          docker network inspect warp-net >/dev/null 2>&1 || docker network create warp-net
+          docker rm -f warp 2>/dev/null || true
           docker run -d --name warp --restart=always --network warp-net \
             -p 1080:1080 --cap-add NET_ADMIN \
             --sysctl net.ipv6.conf.all.disable_ipv6=0 \
             --sysctl net.ipv4.conf.all.src_valid_mark=1 \
             -v warp-data:/var/lib/cloudflare-warp \
             caomingjun/warp
-          sleep 15
-          curl -x socks5h://127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace || true
+          sleep 10
+          curl -x socks5h://127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace --max-time 5 || true
 
-      - name: Install system dependencies
+      - name: Cache FFmpeg (optional)
+        uses: actions/cache@v4
+        id: cache-ffmpeg
+        with:
+          path: /tmp/ffmpeg
+          key: ffmpeg-5.1-ubuntu22
+
+      - name: Install FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-
-      - name: Install Deno
+          mkdir -p /tmp/ffmpeg
+          cp $(which ffmpeg) /tmp/ffmpeg/
+        shell: bash
+      - name: Restore FFmpeg from cache
+        if: steps.cache-ffmpeg.outputs.cache-hit == 'true'
         run: |
-          curl -fsSL https://deno.land/install.sh | sh
-          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+          sudo cp /tmp/ffmpeg/ffmpeg /usr/bin/ffmpeg
+          sudo chmod +x /usr/bin/ffmpeg
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
